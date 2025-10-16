@@ -4,11 +4,10 @@ pragma solidity ^0.8.27;
 
 import {ERC20} from "@openzeppelin/contracts@5.4.0/token/ERC20/ERC20.sol";
 import {ERC20Pausable} from "@openzeppelin/contracts@5.4.0/token/ERC20/extensions/ERC20Pausable.sol";
-import {ERC20Permit} from "@openzeppelin/contracts@5.4.0/token/ERC20/extensions/ERC20Permit.sol";
 import {Ownable} from "@openzeppelin/contracts@5.4.0/access/Ownable.sol";
 
 /// @custom:security-contact monica.galeendo@gmail.com
-contract Monica is ERC20, ERC20Pausable, Ownable, ERC20Permit {
+contract Monica is ERC20, ERC20Pausable, Ownable {
 
     // State variables
     address public treasury;
@@ -26,16 +25,21 @@ contract Monica is ERC20, ERC20Pausable, Ownable, ERC20Permit {
     event FeeExemptionUpdated(address indexed account, bool exempt);
     event TaxCollected(address indexed from, address indexed to, uint256 taxAmount, uint256 transferAmount);
 
+    error InvalidTreasuryAddress();
+    error InvalidTaxFee();
+    error TransferFailed();
 
 
-    constructor(string memory _name,
+    constructor(
+        string memory _name,
         string memory _symbol,
         address _treasury,
         uint256 _taxFee)
         ERC20(_name, _symbol)
         Ownable(msg.sender)
-        ERC20Permit(_name)
     {
+        if (_treasury == address(0)) revert InvalidTreasuryAddress();
+        if (_taxFee > MAX_FEE) revert InvalidTaxFee();
         treasury = _treasury;
         taxFee = _taxFee;
         
@@ -57,7 +61,7 @@ contract Monica is ERC20, ERC20Pausable, Ownable, ERC20Permit {
      * @param _newTreasury New treasury address
      */
     function setTreasury(address _newTreasury) external onlyOwner {
-        //if (_newTreasury == address(0)) revert InvalidTreasuryAddress();
+        if (_newTreasury == address(0)) revert InvalidTreasuryAddress();
         
         address oldTreasury = treasury;
         treasury = _newTreasury;
@@ -76,7 +80,7 @@ contract Monica is ERC20, ERC20Pausable, Ownable, ERC20Permit {
      * @param _newFee New tax fee in basis points
      */
     function setTaxFee(uint256 _newFee) external onlyOwner {
-        //if (_newFee > 10000) revert InvalidTaxFee();
+        if (_newFee > 10000) revert InvalidTaxFee();
         
         uint256 oldFee = taxFee;
         taxFee = _newFee;
@@ -107,7 +111,7 @@ contract Monica is ERC20, ERC20Pausable, Ownable, ERC20Permit {
      */
     function transfer(address to, uint256 amount) public virtual override returns (bool) {
         address owner = _msgSender();
-        _transferWithTax(owner, to, amount);
+        _update(owner, to, amount);
         return true;
     }
     
@@ -117,39 +121,9 @@ contract Monica is ERC20, ERC20Pausable, Ownable, ERC20Permit {
     function transferFrom(address from, address to, uint256 amount) public virtual override returns (bool) {
         address spender = _msgSender();
         _spendAllowance(from, spender, amount);
-        _transferWithTax(from, to, amount);
+        _update(from, to, amount);
         return true;
     }
-    
-    /**
-     * @dev Internal function to handle transfers with tax calculation
-     * @param from Sender address
-     * @param to Recipient address
-     * @param amount Amount to transfer
-     */
-    function _transferWithTax(address from, address to, uint256 amount) internal {
-        // Check if transfer should be taxed
-        bool shouldTax = !isFeeExempt[from] && !isFeeExempt[to] && taxFee > 0;
-        
-        if (shouldTax) {
-            uint256 taxAmount = (amount * taxFee) / MAX_FEE;
-            uint256 transferAmount = amount - taxAmount;
-            
-            // Transfer tax to treasury
-            if (taxAmount > 0) {
-                _transfer(from, treasury, taxAmount);
-            }
-            
-            // Transfer remaining amount to recipient
-            _transfer(from, to, transferAmount);
-            
-            emit TaxCollected(from, to, taxAmount, transferAmount);
-        } else {
-            // No tax applied
-            _transfer(from, to, amount);
-        }
-    }
-    
     
     /**
      * @dev Returns the maximum fee that can be set
@@ -162,7 +136,7 @@ contract Monica is ERC20, ERC20Pausable, Ownable, ERC20Permit {
      * @dev Returns the current tax fee as a percentage (with 2 decimals)
      */
     function getTaxFeePercentage() external view returns (uint256) {
-        return (taxFee * 100) / 100; // Returns basis points
+        return taxFee;
     }
     
     /**
